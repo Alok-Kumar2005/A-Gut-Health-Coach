@@ -11,3 +11,6 @@ opik
 bs4
 requests
 pandas
+rank_bm25
+cohere
+langchain-cohere

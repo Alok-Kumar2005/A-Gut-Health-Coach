@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class LongTermMemory: 
+class VectorStore: 
     def __init__(self, qdrant_url: str = os.getenv("QDRANT_URL"), google_api_key: str = os.getenv("GOOGLE_API_KEY")):
         self.qdrant_url = qdrant_url
         self.google_api_key = google_api_key
@@ -205,13 +205,13 @@ class LongTermMemory:
             logging.error(f"Error in similarity search {str(e)}") 
             raise CustomException(e, sys) from e
 
-memory = LongTermMemory()  
+memory = VectorStore()  
 
 if __name__ == "__main__":
     import asyncio
     
     async def main():
-        memory = LongTermMemory()
+        memory = VectorStore()
         collection_name = "health_articles_collection"
         # file_path = r"alldata\gut_health_raw_data.json" 
         # success = await memory.StoreInMemory(collection_name, file_path)
