@@ -8,3 +8,6 @@ qdrant-client
 langchain-groq
 python-dotenv
 opik
+bs4
+requests
+pandas
