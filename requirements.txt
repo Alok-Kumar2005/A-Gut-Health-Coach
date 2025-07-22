@@ -5,3 +5,5 @@ langgraph
 langchain-google-genai
 langchain-qdrant
 qdrant-client
+langchain-groq
+python-dotenv

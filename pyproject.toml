@@ -9,7 +9,9 @@ dependencies = [
     "langchain-community>=0.3.27",
     "langchain-core>=0.3.70",
     "langchain-google-genai>=2.1.8",
+    "langchain-groq>=0.3.6",
     "langchain-qdrant>=0.2.0",
     "langgraph>=0.5.4",
+    "python-dotenv>=1.1.1",
     "qdrant-client>=1.15.0",
 ]
