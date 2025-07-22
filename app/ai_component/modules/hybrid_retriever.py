@@ -12,12 +12,11 @@ from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
-# from langchain.retrievers import ContextualCompressionRetriever
-# from langchain_cohere import CohereRerank
 from app.ai_component.config import top_collection_search
 from app.ai_component.logger import logging
 from app.ai_component.exception import CustomException
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 
@@ -28,9 +27,43 @@ class DataStore:
         self.bm25_retriever = None
         self.vector_retriever = None
         self.ensemble_retriever = None
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001",google_api_key=self.google_api_key)
-        self.client = QdrantClient(url=self.qdrant_url,prefer_grpc=False)
-        # self.reranker = CohereRerank(cohere_api_key=os.getenv("cohere_api_key"),model="rerank-v3.5",top_n=top_collection_search)
+        self.embeddings = None
+        self.client = None
+        self._initialize_components()
+
+    def _initialize_components(self):
+        """Initialize components with proper error handling"""
+        try:
+            # Initialize embeddings with retry logic
+            self._initialize_embeddings()
+            
+            # Initialize Qdrant client
+            self.client = QdrantClient(url=self.qdrant_url, prefer_grpc=False)
+            logging.info("DataStore components initialized successfully")
+            
+        except Exception as e:
+            logging.error(f"Error initializing DataStore: {str(e)}")
+            raise CustomException(e, sys) from e
+
+    def _initialize_embeddings(self, max_retries=3):
+        """Initialize embeddings with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                self.embeddings = GoogleGenerativeAIEmbeddings(
+                    model="models/embedding-001",
+                    google_api_key=self.google_api_key
+                )
+                # Test the embeddings with a simple query
+                test_embedding = self.embeddings.embed_query("test")
+                if test_embedding:
+                    logging.info("Embeddings initialized successfully")
+                    return
+            except Exception as e:
+                logging.warning(f"Embeddings initialization attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    raise Exception(f"Failed to initialize embeddings after {max_retries} attempts: {str(e)}")
 
     def _collection_exists(self, collection_name: str) -> bool:
         """Check if collection exists"""
@@ -55,8 +88,8 @@ class DataStore:
             )
             logging.info("New collection created")
             return True
-        except CustomException as e:
-            logging.error(f"Error in creating collection; {str(e)}")
+        except Exception as e:
+            logging.error(f"Error in creating collection: {str(e)}")
             raise CustomException(e, sys) from e
 
     def load_json_file(self, file_path: str) -> List[Document]:
@@ -217,6 +250,10 @@ class DataStore:
         try:
             logging.info(f"Storing JSON data from {file_path}")
             
+            # Ensure embeddings are working before proceeding
+            if self.embeddings is None:
+                self._initialize_embeddings()
+            
             # Load JSON document
             documents = self.load_json_file(file_path)
             
@@ -245,13 +282,25 @@ class DataStore:
                 else:
                     texts_to_store.append(doc)
             
-            qdrant = Qdrant.from_documents(
-                texts_to_store,
-                self.embeddings,
-                url=self.qdrant_url,
-                collection_name=collection_name,
-                prefer_grpc=False
-            )
+            # Store in Qdrant with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    qdrant = Qdrant.from_documents(
+                        texts_to_store,
+                        self.embeddings,
+                        url=self.qdrant_url,
+                        collection_name=collection_name,
+                        prefer_grpc=False
+                    )
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logging.warning(f"Attempt {attempt + 1} to store documents failed: {str(e)}, retrying...")
+                        time.sleep(2 ** attempt)
+                        self._initialize_embeddings()  # Reinitialize embeddings
+                    else:
+                        raise e
             
             # Create BM25 retriever from the same documents
             self.create_bm25_retriever(texts_to_store, collection_name)
@@ -261,38 +310,55 @@ class DataStore:
             logging.info(f"Original sections: {len(documents)}, After splitting: {len(texts_to_store)}, Split operations: {split_count}")
             return True
             
-        except CustomException as e:
+        except Exception as e:
             logging.error(f"Error in JSON storing: {str(e)}")
             raise CustomException(e, sys) from e
 
     def search_in_collection(self, query: str, collection_name: str, k: int = top_collection_search) -> List:
         """Search in the collection using vector similarity"""
         try:
+            # Handle query format - extract string content if it's a dict or object
+            if isinstance(query, dict):
+                query_str = query.get("content", str(query))
+            elif hasattr(query, 'content'):
+                query_str = query.content
+            else:
+                query_str = str(query)
+                
             if not self._collection_exists(collection_name=collection_name):
                 logging.warning(f"Collection {collection_name} does not exist")
                 return []
                 
-            logging.info("Search in collection using vector similarity")
+            logging.info(f"Search in collection using vector similarity with query: {query_str}")
+            
+            # Ensure embeddings are working
+            if self.embeddings is None:
+                self._initialize_embeddings()
+                
             db = Qdrant(
                 client=self.client,
                 collection_name=collection_name,
                 embeddings=self.embeddings
             )
-            docs = db.similarity_search_with_score(query=query, k=k)
-            # if docs:
-            #     docs_only = [doc for doc, score in docs]
-            #     reranked_docs = self.reranker.compress_documents(docs_only, query)
-            #     return [(doc, 0.0) for doc in reranked_docs]  
+            docs = db.similarity_search_with_score(query=query_str, k=k)
             logging.info("Relevant docs found with vector similarity score")
             return docs
             
-        except CustomException as e:
+        except Exception as e:
             logging.error(f"Error in similarity search {str(e)}") 
             raise CustomException(e, sys) from e
 
     def bm25_search(self, query: str, collection_name: str, k: int = top_collection_search) -> List[Document]:
         """Search using BM25 keyword retriever"""
         try:
+            # Handle query format - extract string content if it's a dict or object
+            if isinstance(query, dict):
+                query_str = query.get("content", str(query))
+            elif hasattr(query, 'content'):
+                query_str = query.content
+            else:
+                query_str = str(query)
+                
             if self.bm25_retriever is None:
                 self.bm25_retriever = self._load_bm25_retriever(collection_name)
                 
@@ -300,12 +366,9 @@ class DataStore:
                     logging.warning(f"BM25 retriever not found for collection {collection_name}")
                     return []
             
-            logging.info("Search using BM25 keyword retriever")
+            logging.info(f"Search using BM25 keyword retriever with query: {query_str}")
             self.bm25_retriever.k = k
-            docs = self.bm25_retriever.get_relevant_documents(query)
-            # if docs:
-            #     reranked_docs = self.reranker.compress_documents(docs, query)
-            #     return reranked_docs
+            docs = self.bm25_retriever.get_relevant_documents(query_str)
             logging.info(f"Found {len(docs)} documents with BM25 search")
             return docs
             
@@ -316,27 +379,36 @@ class DataStore:
     def hybrid_search(self, query: str, collection_name: str, k: int = top_collection_search) -> List[Document]:
         """Search using ensemble retriever (hybrid: vector + BM25)"""
         try:
+            # Handle query format - extract string content if it's a dict or object
+            if isinstance(query, dict):
+                query_str = query.get("content", str(query))
+            elif hasattr(query, 'content'):
+                query_str = query.content
+            else:
+                query_str = str(query)
+                
+            logging.info(f"Hybrid search with query: {query_str}")
+            
             if self.ensemble_retriever is None:
                 success = self.setup_retrievers(collection_name)
                 if not success:
-                    logging.warning("Could not setup ensemble retriever")
-                    return []
+                    logging.warning("Could not setup ensemble retriever, falling back to BM25 only")
+                    return self.bm25_search(query_str, collection_name, k)
             
             logging.info("Search using hybrid retriever (vector + BM25)")
             self.ensemble_retriever.retrievers[0].search_kwargs = {'k': k} 
             if hasattr(self.ensemble_retriever.retrievers[1], 'k'):
                 self.ensemble_retriever.retrievers[1].k = k 
             
-            docs = self.ensemble_retriever.get_relevant_documents(query)
-            # if docs:
-            #     reranked_docs = self.reranker.compress_documents(docs, query)
-            #     return reranked_docs
+            docs = self.ensemble_retriever.get_relevant_documents(query_str)
             logging.info(f"Found {len(docs)} documents with hybrid search")
             return docs
             
         except Exception as e:
             logging.error(f"Error in hybrid search: {str(e)}")
-            raise CustomException(e, sys) from e
+            # Fallback to BM25 search if hybrid fails
+            logging.info("Falling back to BM25 search")
+            return self.bm25_search(query_str, collection_name, k)
 
     def search_with_method(self, query: str, collection_name: str, method: str = "hybrid", k: int = top_collection_search) -> Union[List, List[Document]]:
         if method == "vector":
@@ -368,26 +440,35 @@ if __name__ == "__main__":
         
         # Vector search
         print("=== VECTOR SEARCH ===")
-        vector_results = memory.search_in_collection(query, collection_name, k=3)
-        for i, (doc, score) in enumerate(vector_results):
-            print(f"\nVector Result {i+1} (Score: {score:.4f}):")
-            print(f"Content: {doc.page_content[:200]}...")
-            print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        try:
+            vector_results = memory.search_in_collection(query, collection_name, k=3)
+            for i, (doc, score) in enumerate(vector_results):
+                print(f"\nVector Result {i+1} (Score: {score:.4f}):")
+                print(f"Content: {doc.page_content[:200]}...")
+                print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        except Exception as e:
+            print(f"Vector search failed: {e}")
         
         # BM25 search
         print("\n=== BM25 KEYWORD SEARCH ===")
-        bm25_results = memory.bm25_search(query, collection_name, k=3)
-        for i, doc in enumerate(bm25_results):
-            print(f"\nBM25 Result {i+1}:")
-            print(f"Content: {doc.page_content[:200]}...")
-            print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        try:
+            bm25_results = memory.bm25_search(query, collection_name, k=3)
+            for i, doc in enumerate(bm25_results):
+                print(f"\nBM25 Result {i+1}:")
+                print(f"Content: {doc.page_content[:200]}...")
+                print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        except Exception as e:
+            print(f"BM25 search failed: {e}")
         
         # Hybrid search
         print("\n=== HYBRID SEARCH ===")
-        hybrid_results = memory.hybrid_search(query, collection_name, k=3)
-        for i, doc in enumerate(hybrid_results):
-            print(f"\nHybrid Result {i+1}:")
-            print(f"Content: {doc.page_content[:200]}...")
-            print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        try:
+            hybrid_results = memory.hybrid_search(query, collection_name, k=3)
+            for i, doc in enumerate(hybrid_results):
+                print(f"\nHybrid Result {i+1}:")
+                print(f"Content: {doc.page_content[:200]}...")
+                print(f"Source: {doc.metadata.get('source', 'unknown')}")
+        except Exception as e:
+            print(f"Hybrid search failed: {e}")
     
     asyncio.run(main())

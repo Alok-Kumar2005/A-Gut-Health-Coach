@@ -19,11 +19,20 @@ async def RouteNode(state: AICompanionState)-> dict:
     try:
         logging.info("Calling Route Node")
         query = state["messages"][-1]
+        
+        # Extract content from query if it's a message object
+        if isinstance(query, dict):
+            query_content = query.get("content", str(query))
+        elif hasattr(query, 'content'):
+            query_content = query.content
+        else:
+            query_content = str(query)
+            
         # default route
         workflow = "GeneralNode"
-        if query:
+        if query_content:
             chain = await router_chain()
-            response = await chain.ainvoke({"query": query})
+            response = await chain.ainvoke({"query": query_content})
             workflow = response.route_node
             logging.info(f"Route Node selected: {workflow}")
         return {
@@ -41,13 +50,25 @@ async def GutHealthNode(state: AICompanionState) -> dict:
     try:
         logging.info("GutHealthNode calling...")
         query = state["messages"][-1]
+        
+        # Extract content from query - this is the key fix
+        if isinstance(query, dict):
+            query_content = query.get("content", str(query))
+        elif hasattr(query, 'content'):
+            query_content = query.content
+        else:
+            query_content = str(query)
+            
+        logging.info(f"Processing query: {query_content}")
 
         # Define or fetch your collection name
         collection_name = "health_articles_collection"
-        docs = memory.hybrid_search(query=query, collection_name=collection_name, k=5)
+        docs = memory.hybrid_search(query=query_content, collection_name=collection_name, k=5)
+        
         if not docs:
             logging.warning("No documents retrieved for query")
             return {"messages": "I couldn't find any relevant information."}
+            
         context_text = "\n\n".join([doc.page_content for doc in docs])
         prompt = PromptTemplate(
             input_variables=["context", "query"],
@@ -55,6 +76,7 @@ async def GutHealthNode(state: AICompanionState) -> dict:
         )
         factory = LLMChainFactory(model_type="gemini")
         llm_chain = await factory.get_llm_chain_async(prompt=prompt)
+        
         qa = RetrievalQA.from_chain_type(
             llm=llm_chain.llm,
             chain_type="stuff",
@@ -63,7 +85,7 @@ async def GutHealthNode(state: AICompanionState) -> dict:
         )
         answer = await qa.arun({
             "context": context_text,
-            "query": query
+            "query": query_content
         })
 
         logging.info("GutHealthNode response generated")

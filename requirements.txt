@@ -14,3 +14,4 @@ pandas
 rank_bm25
 cohere
 langchain-cohere
+protobuf==4.21.12
