@@ -358,8 +358,8 @@ if __name__ == "__main__":
         collection_name = "health_articles_collection"
         
         # Uncomment to store data first
-        # file_path = r"alldata\gut_health_raw_data.json" 
-        # success = await memory.StoreInMemory(collection_name, file_path)
+        file_path = r"alldata\gut_health_raw_data.json" 
+        success = await memory.StoreInMemory(collection_name, file_path)
 
         query = "What is gut microbiome?"
         

@@ -34,16 +34,41 @@ async def RouteNode(state: AICompanionState)-> dict:
         raise CustomException(e, sys) from e
     
 
-async def GutHealthNode(state: AICompanionState)->dict:
+async def GutHealthNode(state: AICompanionState) -> dict:
     """
-    Retrieve the data from the hybrid search
+    Retrieve the data from the hybrid search and answer via RetrievalQA
     """
     try:
-        logging.info("GutHealthNode calling.... ")
+        logging.info("GutHealthNode calling...")
+        query = state["messages"][-1]
+
+        # Define or fetch your collection name
+        collection_name = "health_articles_collection"
+        docs = memory.hybrid_search(query=query, collection_name=collection_name, k=5)
+        if not docs:
+            logging.warning("No documents retrieved for query")
+            return {"messages": "I couldn't find any relevant information."}
+        context_text = "\n\n".join([doc.page_content for doc in docs])
         prompt = PromptTemplate(
-            input_variables=[],
-            template= guthealthNode_template.prompt
+            input_variables=["context", "query"],
+            template=guthealthNode_template.prompt
         )
-        factory = LLMChainFactory(model_type= "gemini")
-        llm = await factory.get_llm_chain_async(prompt= prompt)
-        results = memory.hybrid_search(query, collection_name, k=5)
+        factory = LLMChainFactory(model_type="gemini")
+        llm_chain = await factory.get_llm_chain_async(prompt=prompt)
+        qa = RetrievalQA.from_chain_type(
+            llm=llm_chain.llm,
+            chain_type="stuff",
+            retriever=None,
+            return_source_documents=False
+        )
+        answer = await qa.arun({
+            "context": context_text,
+            "query": query
+        })
+
+        logging.info("GutHealthNode response generated")
+        return {"messages": answer}
+
+    except Exception as e:
+        logging.error(f"Error in GutHealthNode: {e}")
+        raise CustomException(e, sys) from e

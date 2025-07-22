@@ -7,7 +7,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from app.ai_component.graph.state import AICompanionState
-from app.ai_component.graph.nodes import RouteNode
+from app.ai_component.graph.nodes import RouteNode, GutHealthNode
+from app.ai_component.graph.edges import select_workflow
 from typing import Optional
 from opik.integrations.langchain import OpikTracer
 from dotenv import load_dotenv
@@ -23,11 +24,14 @@ def workflow_graph():
 
     ## Adding node
     graph_builder.add_node("RouteNode", RouteNode)
+    graph_builder.add_node("GutHealthNode", GutHealthNode)
 
 
     ## adding edgess
     graph_builder.add_edge(START, "RouteNode")
-    graph_builder.add_edge("RouteNode", END)
+    graph_builder.add_conditional_edges("RouteNode",
+                                        select_workflow,{"GutHealthNode": "GutHealthNode"})
+    graph_builder.add_edge("GutHealthNode", END)
 
     return graph_builder.compile()
 
@@ -54,7 +58,7 @@ async def process_query_async(query: str, route: str = "GeneralHealthNode"):
 
 if __name__ == "__main__":
     async def test_async_execution():
-        query = "Can you give me the forecast of the Wheat price in Uttar Pradesh India maarket of next 5 days"
+        query = "What is gut microbiome?"
         result = await process_query_async(query)
         print(result)
         
