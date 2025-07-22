@@ -12,3 +12,5 @@ groq_model_kwargs = {
     # "top_p": 0.95,
     "max_tokens": 512
 }
+
+top_collection_search = 5
