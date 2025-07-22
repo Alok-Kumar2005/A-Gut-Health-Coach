@@ -1,5 +1,5 @@
 from typing import TypedDict, List
 
 class AICompanionState(TypedDict):
-    message: List[str]
+    messages: List[str]
     route: str

@@ -15,7 +15,7 @@ async def RouteNode(state: AICompanionState)-> dict:
     """
     try:
         logging.info("Calling Route Node")
-        query = state["messages"][-1].content if state["messages"] else ""
+        query = state["messages"][-1]
         # default route
         workflow = "GeneralNode"
         if query:
