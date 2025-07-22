@@ -19,8 +19,6 @@ async def RouteNode(state: AICompanionState)-> dict:
     try:
         logging.info("Calling Route Node")
         query = state["messages"][-1]
-        
-        # Extract content from query if it's a message object
         if isinstance(query, dict):
             query_content = query.get("content", str(query))
         elif hasattr(query, 'content'):
@@ -28,8 +26,7 @@ async def RouteNode(state: AICompanionState)-> dict:
         else:
             query_content = str(query)
             
-        # default route
-        workflow = "GeneralNode"
+        workflow = "GeneralHealthNode"
         if query_content:
             chain = await router_chain()
             response = await chain.ainvoke({"query": query_content})
@@ -50,8 +47,6 @@ async def GutHealthNode(state: AICompanionState) -> dict:
     try:
         logging.info("GutHealthNode calling...")
         query = state["messages"][-1]
-        
-        # Extract content from query - this is the key fix
         if isinstance(query, dict):
             query_content = query.get("content", str(query))
         elif hasattr(query, 'content'):
@@ -60,8 +55,6 @@ async def GutHealthNode(state: AICompanionState) -> dict:
             query_content = str(query)
             
         logging.info(f"Processing query: {query_content}")
-
-        # Define or fetch your collection name
         collection_name = "health_articles_collection"
         docs = memory.hybrid_search(query=query_content, collection_name=collection_name, k=5)
         
@@ -74,22 +67,21 @@ async def GutHealthNode(state: AICompanionState) -> dict:
             input_variables=["context", "query"],
             template=guthealthNode_template.prompt
         )
-        factory = LLMChainFactory(model_type="gemini")
-        llm_chain = await factory.get_llm_chain_async(prompt=prompt)
         
-        qa = RetrievalQA.from_chain_type(
-            llm=llm_chain.llm,
-            chain_type="stuff",
-            retriever=None,
-            return_source_documents=False
-        )
-        answer = await qa.arun({
+        factory = LLMChainFactory(model_type="gemini")
+        llm = factory._get_llm() 
+        llm_chain = await factory.get_llm_chain_async(prompt=prompt)
+        answer = await llm_chain.ainvoke({
             "context": context_text,
             "query": query_content
         })
+        if hasattr(answer, 'content'):
+            final_answer = answer.content
+        else:
+            final_answer = str(answer)
 
         logging.info("GutHealthNode response generated")
-        return {"messages": answer}
+        return {"messages": final_answer}
 
     except Exception as e:
         logging.error(f"Error in GutHealthNode: {e}")
