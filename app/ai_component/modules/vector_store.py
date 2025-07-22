@@ -60,7 +60,7 @@ class LongTermMemory:
             raise CustomException(e, sys) from e
 
     def load_json_file(self, file_path: str) -> List[Document]:
-        """Load and parse specific JSON file (gut_health_qa_pairs.json)"""
+        """Load and parse JSON file with new structure (articles with sections)"""
         try:
             documents = []
             if not os.path.exists(file_path):
@@ -76,21 +76,54 @@ class LongTermMemory:
                     data_items = [json_data]
                 
                 for item in data_items:
-                    if 'question' not in item or 'answer' not in item:
+                    # Check if item has required fields
+                    if 'sections' not in item or not isinstance(item['sections'], list):
                         continue
                     
-                    content = f"Question: {item['question']}\n\nAnswer: {item['answer']}"
+                    # Extract article metadata
+                    article_source = item.get('source', 'unknown')
+                    article_url = item.get('url', '')
+                    article_title = item.get('title', '')
                     
-                    metadata = {
-                        'source': os.path.basename(file_path)
-                    }
-                    
-                    # Create Document object
-                    doc = Document(
-                        page_content=content,
-                        metadata=metadata
-                    )
-                    documents.append(doc)
+                    # Process each section
+                    for section in item['sections']:
+                        if not isinstance(section, dict) or 'content' not in section:
+                            continue
+                        
+                        section_heading = section.get('heading', None)
+                        section_content = section.get('content', [])
+                        
+                        # Handle content as list or string
+                        if isinstance(section_content, list):
+                            content_text = '\n'.join(str(c) for c in section_content if c)
+                        else:
+                            content_text = str(section_content) if section_content else ''
+                        
+                        # Create formatted content
+                        if section_heading:
+                            formatted_content = f"Heading: {section_heading}\n\nContent: {content_text}"
+                        else:
+                            formatted_content = f"Content: {content_text}"
+                        
+                        # Skip if content is empty
+                        if not content_text.strip():
+                            continue
+                        
+                        # Create metadata
+                        metadata = {
+                            'source': article_source,
+                            'url': article_url,
+                            'title': article_title,
+                            'heading': section_heading,
+                            'extraction_status': item.get('extraction_status', 'unknown')
+                        }
+                        
+                        # Create Document object
+                        doc = Document(
+                            page_content=formatted_content,
+                            metadata=metadata
+                        )
+                        documents.append(doc)
             
             logging.info(f"Loaded {len(documents)} documents from {file_path}")
             return documents
@@ -101,7 +134,7 @@ class LongTermMemory:
 
     async def StoreInMemory(self, collection_name: str, file_path: str, chunk_size: int = 2000, chunk_overlap: int = 100) -> bool:
         """
-        Store the specific JSON file data in the vector database
+        Store the JSON file data in the vector database
         """
         try:
             logging.info(f"Storing JSON data from {file_path}")
@@ -113,22 +146,25 @@ class LongTermMemory:
                 logging.warning("No documents found to store")
                 return False
             
-            logging.info(f"Processing {len(documents)} Q&A pairs for collection {collection_name}")
+            logging.info(f"Processing {len(documents)} sections for collection {collection_name}")
             
             self.create_collection(collection_name)
             
-            ### Store documents directly without splitting (each Q&A pair as one document)
-            ### Only split if individual Q&A pairs are too large
+            # Store documents, only split if they exceed chunk_size
             texts_to_store = []
+            split_count = 0
+            
             for doc in documents:
                 if len(doc.page_content) > chunk_size:
-                    ### Only split if the Q&A pair is very large
+                    # Only split if the section content is larger than chunk_size
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap
                     )
                     split_docs = text_splitter.split_documents([doc])
                     texts_to_store.extend(split_docs)
+                    split_count += len(split_docs) - 1  # Count additional chunks created
+                    logging.info(f"Split large section into {len(split_docs)} chunks")
                 else:
                     texts_to_store.append(doc)
             
@@ -141,6 +177,7 @@ class LongTermMemory:
             )
             
             logging.info(f"Successfully stored {len(texts_to_store)} documents in collection {collection_name}")
+            logging.info(f"Original sections: {len(documents)}, After splitting: {len(texts_to_store)}, Split operations: {split_count}")
             return True
             
         except CustomException as e:
@@ -168,20 +205,6 @@ class LongTermMemory:
             logging.error(f"Error in similarity search {str(e)}") 
             raise CustomException(e, sys) from e
 
-    def delete_collection(self, collection_name: str) -> bool:
-        """Delete a collection"""
-        try:
-            if self._collection_exists(collection_name):
-                self.client.delete_collection(collection_name)
-                logging.info(f"Collection {collection_name} deleted")
-                return True
-            else:
-                logging.warning(f"Collection {collection_name} does not exist")
-                return False
-        except Exception as e:
-            logging.error(f"Error deleting collection: {str(e)}")
-            raise CustomException(e, sys) from e
-
 memory = LongTermMemory()  
 
 if __name__ == "__main__":
@@ -189,20 +212,18 @@ if __name__ == "__main__":
     
     async def main():
         memory = LongTermMemory()
-        collection_name = "gut_health_qa_collection"
-        file_path = r"alldata\gut_health_qa_pairs.json"  
-        success = await memory.StoreInMemory(collection_name, file_path)
+        collection_name = "health_articles_collection"
+        # file_path = r"alldata\gut_health_raw_data.json" 
+        # success = await memory.StoreInMemory(collection_name, file_path)
         
-        if success:
-            query = "What are the symptoms of microbiome?"
-            results = memory.search_in_collection(query, collection_name, k=3)
+
+        query = "What is gut microbiome?"
+        results = memory.search_in_collection(query, collection_name, k=5)
             
-            print(f"Search results for: '{query}'")
-            for i, (doc, score) in enumerate(results):
-                print(f"\nResult {i+1} (Score: {score:.4f}):")
-                print(f"Content: {doc.page_content[:300]}...")
-                print(f"Metadata: {doc.metadata}")
-        else:
-            print("Failed to store data")
+        print(f"Search results for: '{query}'")
+        for i, (doc, score) in enumerate(results):
+            print(f"\nResult {i+1} (Score: {score:.4f}):")
+            print(f"Content: {doc.page_content}")
+            print(f"Metadata: {doc.metadata}")
     
     asyncio.run(main())
