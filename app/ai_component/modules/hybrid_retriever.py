@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import pickle
+import asyncio
+import threading
 from datetime import datetime
 from typing import List, Dict, Optional, Union
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -20,6 +22,53 @@ import time
 
 load_dotenv()
 
+def get_or_create_event_loop():
+    """Get existing event loop or create a new one for the current thread"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Event loop is closed")
+        return loop
+    except RuntimeError:
+        # Create new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+def run_in_event_loop(coro):
+    """Run coroutine in event loop, handling different thread contexts"""
+    try:
+        # Check if we're in the main thread with an existing loop
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're in an async context, but need to run sync operation
+            # Create a new thread to run the async operation
+            import concurrent.futures
+            
+            def run_in_new_loop():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(coro)
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
+        else:
+            # We have a loop but it's not running
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        # No event loop exists, create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            # Don't close the loop as it might be needed by other operations
+            pass
+
 class DataStore: 
     def __init__(self, qdrant_url: str = os.getenv("QDRANT_URL"), google_api_key: str = os.getenv("GOOGLE_API_KEY")):
         self.qdrant_url = qdrant_url
@@ -34,10 +83,8 @@ class DataStore:
     def _initialize_components(self):
         """Initialize components with proper error handling"""
         try:
-            # Initialize embeddings with retry logic
             self._initialize_embeddings()
             
-            # Initialize Qdrant client
             self.client = QdrantClient(url=self.qdrant_url, prefer_grpc=False)
             logging.info("DataStore components initialized successfully")
             
@@ -46,24 +93,49 @@ class DataStore:
             raise CustomException(e, sys) from e
 
     def _initialize_embeddings(self, max_retries=3):
-        """Initialize embeddings with retry logic"""
+        """Initialize embeddings with retry logic and proper event loop handling"""
         for attempt in range(max_retries):
             try:
                 self.embeddings = GoogleGenerativeAIEmbeddings(
                     model="models/embedding-001",
                     google_api_key=self.google_api_key
                 )
-                # Test the embeddings with a simple query
-                test_embedding = self.embeddings.embed_query("test")
-                if test_embedding:
+                
+                # Test embeddings in a thread-safe way
+                def test_embedding():
+                    try:
+                        return self.embeddings.embed_query("test")
+                    except Exception as e:
+                        # If async call fails, try to handle it properly
+                        if "event loop" in str(e).lower():
+                            # Create async wrapper for sync context
+                            async def async_test():
+                                return self.embeddings.embed_query("test")
+                            
+                            return run_in_event_loop(async_test())
+                        raise e
+                
+                test_result = test_embedding()
+                if test_result:
                     logging.info("Embeddings initialized successfully")
                     return
+                    
             except Exception as e:
                 logging.warning(f"Embeddings initialization attempt {attempt + 1} failed: {str(e)}")
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
+                    time.sleep(2 ** attempt) 
                 else:
-                    raise Exception(f"Failed to initialize embeddings after {max_retries} attempts: {str(e)}")
+                    # Last attempt - try a different approach
+                    try:
+                        # Try synchronous initialization
+                        self.embeddings = GoogleGenerativeAIEmbeddings(
+                            model="models/embedding-001",
+                            google_api_key=self.google_api_key
+                        )
+                        logging.info("Embeddings initialized successfully (sync mode)")
+                        return
+                    except Exception as final_e:
+                        raise Exception(f"Failed to initialize embeddings after {max_retries} attempts. Final error: {str(final_e)}")
 
     def _collection_exists(self, collection_name: str) -> bool:
         """Check if collection exists"""
@@ -243,9 +315,10 @@ class DataStore:
             logging.error(f"Error setting up retrievers: {str(e)}")
             raise CustomException(e, sys) from e
 
-    async def StoreInMemory(self, collection_name: str, file_path: str, chunk_size: int = 2000, chunk_overlap: int = 100) -> bool:
+    def StoreInMemory(self, collection_name: str, file_path: str, chunk_size: int = 2000, chunk_overlap: int = 100) -> bool:
         """
         Store the JSON file data in the vector database and create BM25 retriever
+        Synchronous version for Streamlit compatibility
         """
         try:
             logging.info(f"Storing JSON data from {file_path}")
@@ -420,55 +493,5 @@ class DataStore:
         else:
             raise ValueError(f"Invalid search method: {method}. Use 'vector', 'bm25', or 'hybrid'")
 
-memory = DataStore()  
-
-if __name__ == "__main__":
-    import asyncio
-    
-    async def main():
-        memory = DataStore()
-        collection_name = "health_articles_collection"
-        
-        # Uncomment to store data first
-        file_path = r"alldata\gut_health_raw_data.json" 
-        success = await memory.StoreInMemory(collection_name, file_path)
-
-        query = "What is gut microbiome?"
-        
-        # Test all three search methods
-        print(f"Search results for: '{query}'\n")
-        
-        # Vector search
-        print("=== VECTOR SEARCH ===")
-        try:
-            vector_results = memory.search_in_collection(query, collection_name, k=3)
-            for i, (doc, score) in enumerate(vector_results):
-                print(f"\nVector Result {i+1} (Score: {score:.4f}):")
-                print(f"Content: {doc.page_content[:200]}...")
-                print(f"Source: {doc.metadata.get('source', 'unknown')}")
-        except Exception as e:
-            print(f"Vector search failed: {e}")
-        
-        # BM25 search
-        print("\n=== BM25 KEYWORD SEARCH ===")
-        try:
-            bm25_results = memory.bm25_search(query, collection_name, k=3)
-            for i, doc in enumerate(bm25_results):
-                print(f"\nBM25 Result {i+1}:")
-                print(f"Content: {doc.page_content[:200]}...")
-                print(f"Source: {doc.metadata.get('source', 'unknown')}")
-        except Exception as e:
-            print(f"BM25 search failed: {e}")
-        
-        # Hybrid search
-        print("\n=== HYBRID SEARCH ===")
-        try:
-            hybrid_results = memory.hybrid_search(query, collection_name, k=3)
-            for i, doc in enumerate(hybrid_results):
-                print(f"\nHybrid Result {i+1}:")
-                print(f"Content: {doc.page_content[:200]}...")
-                print(f"Source: {doc.metadata.get('source', 'unknown')}")
-        except Exception as e:
-            print(f"Hybrid search failed: {e}")
-    
-    asyncio.run(main())
+# Global instance
+memory = DataStore()
