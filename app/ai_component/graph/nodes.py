@@ -2,7 +2,7 @@ from app.ai_component.graph.state import AICompanionState
 from app.ai_component.llm import LLMChainFactory
 from app.ai_component.graph.utils.chains import router_chain
 from app.ai_component.modules.hybrid_retriever import memory
-from app.ai_component.core.prompts import guthealthNode_template
+from app.ai_component.core.prompts import guthealthNode_template, generalHealthNode_template
 from app.ai_component.logger import logging
 from app.ai_component.exception import CustomException
 
@@ -86,3 +86,42 @@ async def GutHealthNode(state: AICompanionState) -> dict:
     except Exception as e:
         logging.error(f"Error in GutHealthNode: {e}")
         raise CustomException(e, sys) from e
+    
+
+
+async def GeneralHealthNode(state: AICompanionState)->dict:
+    """
+    Retutn the simple query of users
+    """
+    try:
+        logging.info("General health Node calling...")
+        query = state["messages"][-1]
+        if isinstance(query, dict):
+            query_content = query.get("content", str(query))
+        elif hasattr(query, 'content'):
+            query_content = query.content
+        else:
+            query_content = str(query)
+        prompt = PromptTemplate(
+            input_variables=["query"],
+            template= generalHealthNode_template.prompt
+        )
+        factory = LLMChainFactory(model_type= "gemini")
+        chain = await factory.get_llm_chain_async(prompt=prompt)
+        response = await chain.ainvoke({"query": query_content})
+        return{
+            "messages": response.content
+        }
+    except CustomException as e:
+        logging.error(f"Error in General health node : {str(e)}")
+        raise CustomException(e,sys) from e
+    
+async def OffTopicNode(state: AICompanionState)-> dict:
+    """
+    REturn simple text to user
+    """
+    logging.info("Calling OffTopicNode ")
+    response = "Please ask question related to gut health"
+    return {
+        "messages": response
+    }

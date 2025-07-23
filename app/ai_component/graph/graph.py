@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from app.ai_component.graph.state import AICompanionState
-from app.ai_component.graph.nodes import RouteNode, GutHealthNode
+from app.ai_component.graph.nodes import RouteNode, GutHealthNode, GeneralHealthNode, OffTopicNode
 from app.ai_component.graph.edges import select_workflow
 from typing import Optional
 from opik.integrations.langchain import OpikTracer
@@ -25,26 +25,32 @@ def workflow_graph():
     ## Adding node
     graph_builder.add_node("RouteNode", RouteNode)
     graph_builder.add_node("GutHealthNode", GutHealthNode)
+    graph_builder.add_node("GeneralHealthNode", GeneralHealthNode)
+    graph_builder.add_node("OffTopicNode", OffTopicNode)
 
 
     ## adding edgess
     graph_builder.add_edge(START, "RouteNode")
     graph_builder.add_conditional_edges("RouteNode",
-                                        select_workflow,{"GutHealthNode": "GutHealthNode"})
+                                        select_workflow,{"GutHealthNode": "GutHealthNode",
+                                                         "GeneralHealthNode": "GeneralHealthNode",
+                                                         "OffTopicNode": "OffTopicNode"})
     graph_builder.add_edge("GutHealthNode", END)
+    graph_builder.add_edge("GeneralHealthNode", END)
+    graph_builder.add_edge("OffTopicNode", END)
 
     return graph_builder.compile()
 
 graph = workflow_graph()
 tracer = OpikTracer(graph=graph.get_graph(xray=True))
 
-try:
-    img_data = graph.get_graph().draw_mermaid_png()
-    with open("workflow.png", "wb") as f:
-        f.write(img_data)
-    print("Graph saved as workflow.png")
-except Exception as e:
-    print(f"Error: {e}")
+# try:
+#     img_data = graph.get_graph().draw_mermaid_png()
+#     with open("workflow.png", "wb") as f:
+#         f.write(img_data)
+#     print("Graph saved as workflow.png")
+# except Exception as e:
+#     print(f"Error: {e}")
 
 
 async def process_query_async(query: str, route: str = "GeneralHealthNode"):
