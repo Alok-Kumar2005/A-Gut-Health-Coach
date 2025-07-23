@@ -144,7 +144,6 @@ async def test_critical_questions():
         response = await coach.process_message(question, session_id)
         print(f"August's Response:\n{response}\n")
         
-        # Small delay to prevent overwhelming the system
         await asyncio.sleep(1)
 
 if __name__ == "__main__":
@@ -154,17 +153,17 @@ if __name__ == "__main__":
         welcome = await coach.start_conversation(session_id)
         print("August:", welcome)
         
-        query = "I've been feeling bloated after every meal. What could be causing this?"
-        response = await coach.process_message(query, session_id)
-        print(f"\nUser: {query}")
-        print(f"August: {response}")
+        # query = "I've been feeling bloated after every meal. What could be causing this?"
+        # response = await coach.process_message(query, session_id)
+        # print(f"\nUser: {query}")
+        # print(f"August: {response}")
         
-        follow_up = "What foods should I avoid?"
-        response2 = await coach.process_message(follow_up, session_id)
-        print(f"\nUser: {follow_up}")
-        print(f"August: {response2}")
+        # follow_up = "What foods should I avoid?"
+        # response2 = await coach.process_message(follow_up, session_id)
+        # print(f"\nUser: {follow_up}")
+        # print(f"August: {response2}")
         
-        ### uncomment to run full critical question
-        # await test_critical_questions()
+        ## uncomment to run full critical question
+        await test_critical_questions()
         
     asyncio.run(main())
